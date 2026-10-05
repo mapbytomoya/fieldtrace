@@ -10,6 +10,10 @@ import { Timeline } from './components/Timeline';
 import { DropZone } from './components/DropZone';
 import { EventEditor, EventSummary } from './components/EventInfoView';
 import { PrintReport } from './components/PrintReport';
+import { SharePanel } from './components/SharePanel';
+import type { SharedData } from './lib/share';
+import { hasShareInUrl, loadShareFromUrl } from './lib/share';
+import { SharedContext } from './lib/sharedContext';
 
 export const NOTICE =
   'この記録は、写真・動画に保存された撮影日時・位置情報をもとに事後的に可視化したものです。連続的なGPSトラッキング記録ではありません。';
@@ -48,10 +52,34 @@ export default function App() {
     setStorageStatus(saveState(buildState(event, items)));
   }, [event, items]);
 
-  const venue = venueOf(event);
-  const resolved = useMemo(() => resolveItems(items, venue), [items, venue?.lat, venue?.lng]); // eslint-disable-line
+  // 共有リンクから開いた場合は、閲覧者自身の保存データとは別に読み取り専用で表示する
+  const [shareMode] = useState(() => hasShareInUrl());
+  const [shared, setShared] = useState<SharedData | null>(null);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [sharePanelOpen, setSharePanelOpen] = useState(false);
+  useEffect(() => {
+    if (!shareMode) return;
+    loadShareFromUrl()
+      .then((data) => setShared(data))
+      .catch((e: unknown) => setShareError(e instanceof Error ? e.message : String(e)));
+  }, [shareMode]);
+  useEffect(() => {
+    const onHash = () => {
+      if (hasShareInUrl() || shareMode) location.reload();
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, [shareMode]);
+
+  const dEvent = shareMode ? (shared?.state.event ?? emptyEvent) : event;
+  const dItems = shareMode ? (shared?.state.items ?? []) : items;
+  const dUrls = shareMode ? (shared?.media ?? {}) : urls;
+  const dView = shareMode || viewMode;
+
+  const venue = venueOf(dEvent);
+  const resolved = useMemo(() => resolveItems(dItems, venue), [dItems, venue?.lat, venue?.lng]); // eslint-disable-line
   const selected = resolved.find((i) => i.record.id === selectedId) ?? resolved[0] ?? null;
-  const missingFiles = items.filter((i) => !urls[i.id]).length;
+  const missingFiles = shareMode ? 0 : items.filter((i) => !urls[i.id]).length;
   const noLocation = resolved.filter((i) => !i.location).length;
   const noDate = resolved.filter((i) => !i.takenAt).length;
 
@@ -130,7 +158,7 @@ export default function App() {
   const addFilesRef = useRef(addFiles);
   addFilesRef.current = addFiles;
   const viewModeRef = useRef(viewMode);
-  viewModeRef.current = viewMode;
+  viewModeRef.current = dView;
   useEffect(() => {
     const over = (e: DragEvent) => e.preventDefault();
     const drop = (e: DragEvent) => {
@@ -214,6 +242,18 @@ export default function App() {
     setMessages([]);
   };
 
+  const openOwnRecords = () => {
+    location.href = location.origin + location.pathname;
+  };
+
+  const importShared = () => {
+    if (!shared) return;
+    if (items.length > 0 && !window.confirm('自分の記録を、この共有記録の内容で置き換えますか？')) return;
+    Object.values(urls).forEach((u) => URL.revokeObjectURL(u));
+    saveState(shared.state);
+    openOwnRecords();
+  };
+
   const step = (delta: number) => {
     if (!selected) return;
     const next = resolved[selected.order - 1 + delta];
@@ -221,13 +261,39 @@ export default function App() {
   };
 
   return (
-    <div className={`app${viewMode ? ' is-view' : ''}`}>
+    <SharedContext.Provider value={shareMode}>
+    <div className={`app${dView ? ' is-view' : ''}`}>
       <header className="topbar">
         <div className="brand">
           <span className="brand-name">FieldTrace</span>
           <span className="brand-sub">写真・動画の撮影日時と位置情報の記録</span>
         </div>
         <div className="toolbar no-print">
+          {shareMode ? (
+            <>
+              {shared && (
+                <button type="button" className="btn" onClick={importShared}>
+                  自分の記録として取り込む
+                </button>
+              )}
+              <button type="button" className="btn" onClick={() => window.print()}>
+                印刷 / PDF保存
+              </button>
+              <button type="button" className="btn" onClick={openOwnRecords}>
+                自分の記録を開く
+              </button>
+            </>
+          ) : (
+          <>
+          {!viewMode && (
+            <button
+              type="button"
+              className={`btn${sharePanelOpen ? ' btn-primary' : ''}`}
+              onClick={() => setSharePanelOpen((v) => !v)}
+            >
+              共有
+            </button>
+          )}
           {!viewMode && (
             <>
               <button type="button" className="btn" onClick={exportJson} disabled={items.length === 0 && !event.name}>
@@ -264,11 +330,13 @@ export default function App() {
           >
             {viewMode ? '編集モードに戻る' : '閲覧モード'}
           </button>
+          </>
+          )}
         </div>
       </header>
 
       <section className="event">
-        {editingEvent && !viewMode ? (
+        {editingEvent && !dView ? (
           <EventEditor
             event={event}
             onChange={setEvent}
@@ -281,8 +349,8 @@ export default function App() {
           />
         ) : (
           <div className="event-row">
-            <EventSummary event={event} />
-            {!viewMode && (
+            <EventSummary event={dEvent} />
+            {!dView && (
               <button type="button" className="btn no-print" onClick={() => setEditingEvent(true)}>
                 イベント情報を編集
               </button>
@@ -295,13 +363,29 @@ export default function App() {
         {NOTICE}
       </p>
 
-      {(progress || messages.length > 0 || storageStatus !== 'ok' || (missingFiles > 0 && !viewMode)) && (
+      {shareMode && (
+        <div className="shared-banner" role="status">
+          <p>
+            {shareError
+              ? shareError
+              : shared
+                ? `共有された記録を表示しています（読み取り専用）。出典: ${shared.source}`
+                : '共有された記録を読み込んでいます…'}
+          </p>
+        </div>
+      )}
+
+      {sharePanelOpen && !dView && (
+        <SharePanel event={event} items={items} urls={urls} onClose={() => setSharePanelOpen(false)} />
+      )}
+
+      {(progress || messages.length > 0 || storageStatus !== 'ok' || (missingFiles > 0 && !dView)) && (
         <div className="messages no-print" aria-live="polite">
           {progress && <p>{progress}</p>}
           {messages.map((m, i) => (
             <p key={i}>{m}</p>
           ))}
-          {missingFiles > 0 && !viewMode && (
+          {missingFiles > 0 && !dView && (
             <p>
               {missingFiles}件はファイル本体が読み込まれていません（ブラウザにはメタデータと入力内容のみ保存されます）。
               表示・再生するには同じファイルを選択し直してください。ファイル名とサイズで照合します。{' '}
@@ -335,9 +419,9 @@ export default function App() {
         <div className="main-map">
           <MapView
             items={resolved}
-            urls={urls}
+            urls={dUrls}
             venue={venue}
-            venueName={event.venueName}
+            venueName={dEvent.venueName}
             selectedId={selectedId}
             onSelect={select}
             pickMode={pickMode}
@@ -351,9 +435,9 @@ export default function App() {
               key={selected.record.id}
               item={selected}
               total={resolved.length}
-              url={urls[selected.record.id]}
+              url={dUrls[selected.record.id]}
               venueSet={venue !== null}
-              viewMode={viewMode}
+              viewMode={dView}
               editing={editingMedia}
               onEdit={(v) => {
                 setEditingMedia(v);
@@ -372,8 +456,8 @@ export default function App() {
                 document.querySelector('.map-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
               }}
             />
-          ) : viewMode ? (
-            <p className="empty">記録がありません。</p>
+          ) : dView ? (
+            <p className="empty">{shareMode && !shared && !shareError ? '読み込み中…' : '記録がありません。'}</p>
           ) : (
             <DropZone onFiles={addFiles} large />
           )}
@@ -401,11 +485,11 @@ export default function App() {
           )}
         </div>
         {resolved.length > 0 ? (
-          <Timeline items={resolved} selectedId={selected?.record.id ?? null} loaded={urls} onSelect={select} />
+          <Timeline items={resolved} selectedId={selected?.record.id ?? null} loaded={dUrls} onSelect={select} showMissing={!shareMode} />
         ) : (
           <p className="empty">まだ写真・動画が読み込まれていません。</p>
         )}
-        {!viewMode && resolved.length > 0 && (
+        {!dView && resolved.length > 0 && (
           <div className="records-foot no-print">
             <DropZone onFiles={addFiles} />
             <button type="button" className="btn btn-quiet" onClick={clearAll}>
@@ -415,7 +499,7 @@ export default function App() {
         )}
       </section>
 
-      <PrintReport items={resolved} urls={urls} />
+      <PrintReport items={resolved} urls={dUrls} />
 
       <footer className="footer">
         <span>地図: © OpenStreetMap contributors</span>
@@ -426,5 +510,6 @@ export default function App() {
         <span className="print-only">出力: FieldTrace / {new Date().toLocaleString('ja-JP')}</span>
       </footer>
     </div>
+    </SharedContext.Provider>
   );
 }

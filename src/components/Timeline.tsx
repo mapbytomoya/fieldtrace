@@ -9,14 +9,17 @@ interface Props {
   selectedId: string | null;
   loaded: Record<string, string>;
   onSelect: (id: string) => void;
+  showMissing: boolean;
 }
 
-export function Timeline({ items, selectedId, loaded, onSelect }: Props) {
+export function Timeline({ items, selectedId, loaded, onSelect, showMissing }: Props) {
   let lastDate = '';
   return (
     <ol className="timeline">
       {items.map((item) => {
         const r = item.record;
+        // 共有表示では loaded に共有画像が入る
+        const thumb = r.thumbnail ?? (showMissing ? null : loaded[r.id]);
         const date = formatDate(item.takenAt);
         const showDate = date !== lastDate;
         lastDate = date;
@@ -29,7 +32,7 @@ export function Timeline({ items, selectedId, loaded, onSelect }: Props) {
               aria-current={r.id === selectedId}
             >
               <div className="tl-thumb">
-                {r.thumbnail ? <img src={r.thumbnail} alt="" /> : <span>プレビューなし</span>}
+                {thumb ? <img src={thumb} alt="" /> : <span>プレビューなし</span>}
                 <span className="tl-no">{item.order}</span>
               </div>
               <div className="tl-body">
@@ -58,7 +61,7 @@ export function Timeline({ items, selectedId, loaded, onSelect }: Props) {
                   {r.category && <span className="tl-cat">{CATEGORY_LABEL[r.category]}</span>}
                 </div>
                 {r.note && <div className="tl-note">{r.note}</div>}
-                {!loaded[r.id] && <div className="tl-missing">ファイル未読込</div>}
+                {showMissing && !loaded[r.id] && <div className="tl-missing">ファイル未読込</div>}
               </div>
             </button>
           </li>

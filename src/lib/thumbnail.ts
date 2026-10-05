@@ -1,8 +1,8 @@
-const MAX_SIZE = 320;
+const THUMB_SIZE = 320;
 
-function drawToDataUrl(source: CanvasImageSource, w: number, h: number): string | null {
+function drawToDataUrl(source: CanvasImageSource, w: number, h: number, maxSize: number, quality: number): string | null {
   if (!w || !h) return null;
-  const scale = Math.min(1, MAX_SIZE / Math.max(w, h));
+  const scale = Math.min(1, maxSize / Math.max(w, h));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(w * scale);
   canvas.height = Math.round(h * scale);
@@ -10,24 +10,24 @@ function drawToDataUrl(source: CanvasImageSource, w: number, h: number): string 
   if (!ctx) return null;
   ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
   try {
-    return canvas.toDataURL('image/jpeg', 0.72);
+    return canvas.toDataURL('image/jpeg', quality);
   } catch {
     return null;
   }
 }
 
 /** 画像の縮小版を作る。ブラウザが表示できない形式（HEIC など）の場合は null。 */
-export function imageThumbnail(url: string): Promise<string | null> {
+export function imageThumbnail(url: string, maxSize = THUMB_SIZE, quality = 0.72): Promise<string | null> {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => resolve(drawToDataUrl(img, img.naturalWidth, img.naturalHeight));
+    img.onload = () => resolve(drawToDataUrl(img, img.naturalWidth, img.naturalHeight, maxSize, quality));
     img.onerror = () => resolve(null);
     img.src = url;
   });
 }
 
 /** 動画の代表フレーム（0.5 秒付近）を取得する。再生できない場合は null。 */
-export function videoThumbnail(url: string): Promise<string | null> {
+export function videoThumbnail(url: string, maxSize = THUMB_SIZE, quality = 0.72): Promise<string | null> {
   return new Promise((resolve) => {
     const video = document.createElement('video');
     let done = false;
@@ -47,7 +47,7 @@ export function videoThumbnail(url: string): Promise<string | null> {
       const d = Number.isFinite(video.duration) ? video.duration : 0;
       video.currentTime = Math.min(0.5, d / 2);
     };
-    video.onseeked = () => finish(drawToDataUrl(video, video.videoWidth, video.videoHeight));
+    video.onseeked = () => finish(drawToDataUrl(video, video.videoWidth, video.videoHeight, maxSize, quality));
     video.onerror = () => finish(null);
     video.src = url;
   });

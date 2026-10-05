@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
+import { SharedContext } from '../lib/sharedContext';
 import type { MediaRecord } from '../types';
 import { isHeic } from '../lib/metadata';
 
@@ -13,6 +14,24 @@ export function MediaPreview({ record, url, compact }: Props) {
   useEffect(() => setFailed(false), [url]);
   const alt = record.title || record.fileName;
   const cls = `preview${compact ? ' preview-compact' : ''}`;
+  const shared = useContext(SharedContext);
+
+  if (shared) {
+    // 共有データ: url は縮小画像または動画の代表フレーム
+    const src = url ?? record.thumbnail;
+    return (
+      <div className={cls}>
+        {src ? <img src={src} alt={alt} /> : <div className="preview-empty">プレビューなし</div>}
+        {!src ? (
+          <p className="preview-msg">写真・動画はこの共有リンクに含まれていません（記録データのみ）。</p>
+        ) : record.kind === 'video' ? (
+          <p className="preview-msg">動画の代表フレームです。動画本体は共有されていません。</p>
+        ) : !url ? (
+          <p className="preview-msg">サムネイルのみ共有されています。</p>
+        ) : null}
+      </div>
+    );
+  }
 
   if (!url) {
     return (
