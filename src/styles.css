@@ -366,3 +366,9 @@ code { font-family: var(--mono); font-size: 12px; background: var(--bg-sub); pad
 }
 @media print { .shared-banner .btn-row { display: none; } }
 a.btn { text-decoration: none; color: inherit; }
+.share-cloud { display: flex; flex-direction: column; gap: 8px; padding-bottom: 16px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.share-cloud p { margin: 0; }
+.share-cloud select { width: auto; }
+.share-agree { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.share-agree input { width: auto; min-height: 0; margin-top: 4px; }
+.share-other summary { cursor: pointer; color: var(--text-sub); font-size: 13px; margin-bottom: 12px; }

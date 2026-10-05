@@ -3,10 +3,12 @@
 //    # 以降はサーバーへ送信されない。
 //  - 共有用ファイル: 縮小した写真・動画の代表フレームを含む JSON。Web 上に置き、
 //    ?src=<URL> で開く。
+//  - 写真付き共有リンク: 共有用ファイルを Supabase Storage に保存し、?s=<ID> で開く。
 
 import type { EventInfo, MediaRecord, SavedState } from '../types';
 import { buildState, parseState, safeImage } from './storage';
 import { imageThumbnail, videoThumbnail } from './thumbnail';
+import { SHARE_BUCKET, SUPABASE_ANON_KEY, SUPABASE_URL, cloudShareEnabled } from '../config';
 
 export interface SharedData {
   state: SavedState;
@@ -106,7 +108,45 @@ function parseShared(data: unknown, source: string): SharedData {
 
 /** 現在の URL が共有リンクかどうか。 */
 export function hasShareInUrl(): boolean {
-  return location.hash.startsWith(HASH_PREFIX) || new URLSearchParams(location.search).has('src');
+  const q = new URLSearchParams(location.search);
+  return location.hash.startsWith(HASH_PREFIX) || q.has('src') || q.has('s');
+}
+
+const CLOUD_ID = /^[A-Za-z0-9_-]{22}$/;
+
+function cloudObjectUrl(id: string): string {
+  return `${SUPABASE_URL}/storage/v1/object/public/${SHARE_BUCKET}/${id}.json`;
+}
+
+/** 共有用ファイルを Supabase Storage に保存し、写真付き共有リンクを返す。 */
+export async function uploadSharePackage(blob: Blob): Promise<string> {
+  if (!cloudShareEnabled) throw new Error('写真付き共有リンクの保存先が設定されていません。');
+  const id = toBase64Url(crypto.getRandomValues(new Uint8Array(16)));
+  const headers: Record<string, string> = {
+    apikey: SUPABASE_ANON_KEY,
+    'Content-Type': 'application/json',
+    'x-upsert': 'false',
+  };
+  // 旧形式の anon key（JWT）の場合のみ Authorization ヘッダーを付ける
+  if (SUPABASE_ANON_KEY.startsWith('eyJ')) headers.Authorization = `Bearer ${SUPABASE_ANON_KEY}`;
+  let res: Response;
+  try {
+    res = await fetch(`${SUPABASE_URL}/storage/v1/object/${SHARE_BUCKET}/${id}.json`, {
+      method: 'POST',
+      headers,
+      body: blob,
+    });
+  } catch {
+    throw new Error('アップロードできませんでした。ネットワーク接続を確認してください。');
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    if (res.status === 413 || /size/i.test(detail)) {
+      throw new Error('ファイルが大きすぎます（上限20MB）。画像サイズを小さくするか、件数を減らしてください。');
+    }
+    throw new Error(`アップロードできませんでした（HTTP ${res.status}）。`);
+  }
+  return `${baseUrl()}?s=${id}`;
 }
 
 /** URL から共有データを読み込む。共有リンクでなければ null。 */
@@ -120,6 +160,21 @@ export async function loadShareFromUrl(): Promise<SharedData | null> {
       throw new Error('共有リンクが壊れているか、途中で切れています。リンク全体をコピーしてください。');
     }
     return parseShared(JSON.parse(text), '共有リンク');
+  }
+  const cloudId = new URLSearchParams(location.search).get('s');
+  if (cloudId !== null) {
+    if (!CLOUD_ID.test(cloudId) || !cloudShareEnabled) throw new Error('共有リンクのURLが正しくありません。');
+    let res: Response;
+    try {
+      res = await fetch(cloudObjectUrl(cloudId));
+    } catch {
+      throw new Error('共有された記録を取得できませんでした。ネットワーク接続を確認してください。');
+    }
+    if (res.status === 400 || res.status === 404) {
+      throw new Error('共有された記録が見つかりません。削除されたか、リンクが途中で切れています。');
+    }
+    if (!res.ok) throw new Error(`共有された記録を取得できませんでした（HTTP ${res.status}）。`);
+    return parseShared(await res.json(), '写真付き共有リンク');
   }
   const src = new URLSearchParams(location.search).get('src');
   if (src) {
